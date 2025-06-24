@@ -16,5 +16,5 @@ public interface CheckInRepository extends JpaRepository<CheckIn, UUID> {
 
     Optional<CheckIn> findByUserAndCheckInDate(User user, LocalDate checkInDate);
 
-    List<CheckIn> findByUserOrderByCreatedUserAtDesc(User user);
+    List<CheckIn> findByUserOrderByCreatedAtDesc(User user);
 }
