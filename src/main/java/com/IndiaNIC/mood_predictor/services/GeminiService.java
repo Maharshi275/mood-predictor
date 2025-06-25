@@ -9,131 +9,131 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 @Service
 public class GeminiService {
-    private final RestTemplate restTemplate;
 
     @Value("${gemini.api.key}")
     private String geminiApiKey;
 
-    private static final String GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
-
+    private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
-    public GeminiService(RestTemplate restTemplate) {
+    public GeminiService(RestTemplate restTemplate, ObjectMapper objectMapper) {
         this.restTemplate = restTemplate;
-        this.objectMapper = new ObjectMapper();
+        this.objectMapper = objectMapper;
     }
+
     public String generateCheckinQuestions() {
-        String url = GEMINI_API_BASE_URL + "?key=" + geminiApiKey;
+        // --- FIX START: Simplified prompt for question generation ---
+        String prompt = "Generate 10 daily mood check-in questions. Each question should be concise and end with a question mark. Each must have an 'answer_type' which is 'yes_no' or 'yes_no_maybe'. Return only the JSON array and give only the question.";
+        // --- FIX END ---
 
-        // Construct the request body as a Java Map, then convert to JSON string
-        // This defines the structure and prompt for the Gemini API
-        String requestBody = "{\n" +
-                "    \"contents\": [\n" +
-                "        {\n" +
-                "            \"role\": \"user\",\n" +
-                "            \"parts\": [\n" +
-                "                {\"text\": \"Generate 10 concise, reflective yes/no or yes/no/maybe questions for a daily mood check-in. Provide them as a JSON array where each object has a 'question' field and an 'answer_type' field (either 'yes_no' or 'yes_no_maybe'). Example: [{'question': 'Did you feel energetic today?', 'answer_type': 'yes_no'}, ...]. Ensure only the JSON array is returned, no pre-text or post-text.\"\n}" +
-                "            ]\n" +
-                "        }\n" +
-                "    ],\n" +
-                "    \"generationConfig\": {\n" +
-                "        \"responseMimeType\": \"application/json\",\n" +
-                "        \"responseSchema\": {\n" +
-                "            \"type\": \"ARRAY\",\n" +
-                "            \"items\": {\n" +
-                "                \"type\": \"OBJECT\",\n" +
-                "                \"properties\": {\n" +
-                "                    \"question\": { \"type\": \"STRING\" },\n" +
-                "                    \"answer_type\": { \"type\": \"STRING\", \"enum\": [\"yes_no\", \"yes_no_maybe\"] }\n" +
-                "                }\n" +
-                "            }\n" +
-                "        }\n" +
-                "    }\n" +
-                "}";
-
-
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON); // Set Content-Type header
-
-        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers); // Create HTTP entity with body and headers
-
-        try {
-            // Make the POST request and get the raw JSON response
-            String response = restTemplate.postForObject(url, entity, String.class);
-            if (response == null || response.isEmpty()) {
-                throw new RuntimeException("Gemini API returned an empty or null response for questions.");
-            }
-
-            // Parse the response to extract the actual JSON array of questions
-            JsonNode root = objectMapper.readTree(response);
-            JsonNode candidates = root.path("candidates");
-            if (candidates.isArray() && !candidates.isEmpty()) {
-                JsonNode content = candidates.get(0).path("content");
-                if (content.has("parts") && content.path("parts").isArray() && !content.path("parts").isEmpty()) {
-                    JsonNode textNode = content.path("parts").get(0).path("text");
-                    if (textNode.isTextual()) {
-                        return textNode.asText();
-                    }
-                }
-            }
-            throw new RuntimeException("Failed to parse questions from Gemini API response: " + response);
-
-        } catch (Exception e) {
-            System.err.println("Error calling Gemini API for questions: " + e.getMessage());
-            e.printStackTrace();
-            throw new RuntimeException("Failed to get questions from AI. " + e.getMessage(), e);
-        }
+        // Call callGeminiApi expecting a JSON result (true)
+        return callGeminiApi(prompt, true);
     }
 
     public String predictMood(String questionsJson, String answersJson) {
-        String url = GEMINI_API_BASE_URL + "?key=" + geminiApiKey;
+        String prompt = "Given the following daily check-in questions and answers:\n" +
+                "Questions: " + questionsJson + "\n" +
+                "Answers: " + answersJson + "\n" +
+                "Based on these, predict the user's overall mood today. Respond with only one word: 'Happy', 'Sad', or 'Flat'.";
 
-        // Construct the request body as a Java Map, then convert to JSON string
-        String prompt = "Given the following questions and user answers, classify the user's overall mood as either 'Flat', 'Happy', or 'Sad'. Only return the mood string (e.g., 'Happy'), no other text. \n\nQuestions: " + questionsJson + "\nAnswers: " + answersJson;
+        // Call callGeminiApi expecting a plain text result (false)
+        return callGeminiApi(prompt, false);
+    }
 
-        String requestBody = "{\n" +
-                "    \"contents\": [\n" +
-                "        {\n" +
-                "            \"role\": \"user\",\n" +
-                "            \"parts\": [\n" +
-                "                {\"text\": \"" + prompt.replace("\"", "\\\"") + "\"}\n" + // Escape double quotes in prompt
-                "            ]\n" +
-                "        }\n" +
-                "    ]\n" +
-                "}";
+    // Added expectJsonResult parameter to conditionally handle JSON parsing
+    private String callGeminiApi(String prompt, boolean expectJsonResult) {
+        String apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + geminiApiKey;
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
 
-        HttpEntity<String> entity = new HttpEntity<>(requestBody, headers);
+        Map<String, Object> part = new HashMap<>();
+        part.put("text", prompt);
+
+        Map<String, Object> content = new HashMap<>();
+        content.put("role", "user");
+        content.put("parts", Collections.singletonList(part));
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("contents", Collections.singletonList(content));
+
+        // Only add generationConfig if expecting JSON, and it's the question generation prompt
+        // (using the simplified prompt text for the check here)
+        if (expectJsonResult && prompt.contains("Generate 10 daily mood check-in questions.")) {
+            Map<String, Object> generationConfig = new HashMap<>();
+            generationConfig.put("responseMimeType", "application/json");
+            Map<String, Object> responseSchema = new HashMap<>();
+            responseSchema.put("type", "ARRAY");
+            Map<String, Object> items = new HashMap<>();
+            items.put("type", "OBJECT");
+            Map<String, Object> properties = new HashMap<>();
+            properties.put("question", Collections.singletonMap("type", "STRING"));
+            properties.put("answer_type", Map.of("type", "STRING", "enum", List.of("yes_no", "yes_no_maybe")));
+            items.put("properties", properties);
+            generationConfig.put("responseSchema", responseSchema);
+            responseSchema.put("items", items);
+            payload.put("generationConfig", generationConfig);
+        }
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(payload, headers);
 
         try {
-            String response = restTemplate.postForObject(url, entity, String.class);
-            if (response == null || response.isEmpty()) {
-                throw new RuntimeException("Gemini API returned an empty or null response for mood prediction.");
-            }
+            Map<String, Object> apiResponse = restTemplate.postForObject(apiUrl, request, Map.class);
 
-            // Parse the response to extract the predicted mood
-            JsonNode root = objectMapper.readTree(response);
-            JsonNode candidates = root.path("candidates");
-            if (candidates.isArray() && !candidates.isEmpty()) {
-                JsonNode content = candidates.get(0).path("content");
-                if (content.has("parts") && content.path("parts").isArray() && !content.path("parts").isEmpty()) {
-                    JsonNode textNode = content.path("parts").get(0).path("text");
-                    if (textNode.isTextual()) {
-                        // The 'text' field should contain only the mood string
-                        return textNode.asText().trim(); // Trim to remove any leading/trailing whitespace
+            if (apiResponse != null && apiResponse.containsKey("candidates")) {
+                List<Map<String, Object>> candidates = (List<Map<String, Object>>) apiResponse.get("candidates");
+                if (!candidates.isEmpty()) {
+                    Map<String, Object> firstCandidate = candidates.get(0);
+                    if (firstCandidate.containsKey("content")) {
+                        Map<String, Object> contentMap = (Map<String, Object>) firstCandidate.get("content");
+                        if (contentMap.containsKey("parts")) {
+                            List<Map<String, Object>> parts = (List<Map<String, Object>>) contentMap.get("parts");
+                            if (!parts.isEmpty()) {
+                                String rawText = (String) parts.get(0).get("text");
+
+                                // Trim whitespace just in case
+                                rawText = rawText.trim();
+
+                                // --- Conditional JSON Handling START ---
+                                if (expectJsonResult) {
+                                    // Strip Markdown fences only if we expect JSON
+                                    rawText = rawText.replaceAll("```json\\n?", "").replaceAll("\\n```$", "");
+                                    rawText = rawText.replaceAll("```typescript\\n?", "").replaceAll("\\n```$", "");
+                                    rawText = rawText.replaceAll("```text\\n?", "").replaceAll("\\n```$", "");
+                                    rawText = rawText.replaceAll("```\\n?", "").replaceAll("\\n```$", "");
+                                    rawText = rawText.trim(); // Re-trim after stripping
+
+                                    try {
+                                        JsonNode jsonNode = objectMapper.readTree(rawText);
+                                        return objectMapper.writeValueAsString(jsonNode);
+                                    } catch (Exception e) {
+                                        System.err.println("Error parsing/serializing LLM response to ensure proper JSON: " + e.getMessage());
+                                        System.err.println("Raw text that caused parsing error: " + rawText);
+                                        // Fallback to raw text if parsing fails, but log the error
+                                        return rawText;
+                                    }
+                                } else {
+                                    // If not expecting JSON (e.g., mood prediction), return raw text directly
+                                    return rawText;
+                                }
+                                // --- Conditional JSON Handling END ---
+                            }
+                        }
                     }
                 }
             }
-            throw new RuntimeException("Failed to parse predicted mood from Gemini API response: " + response);
-
+            throw new RuntimeException("Gemini API response did not contain expected content or was empty.");
         } catch (Exception e) {
-            System.err.println("Error calling Gemini API for mood prediction: " + e.getMessage());
+            System.err.println("Error calling Gemini API: " + e.getMessage());
             e.printStackTrace();
-            throw new RuntimeException("Failed to predict mood from AI. " + e.getMessage(), e);
+            throw new RuntimeException("Failed to get response from Gemini API: " + e.getMessage(), e);
         }
     }
 }
